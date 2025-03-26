@@ -1,8 +1,9 @@
 import pandas as pd
 import re
 import csv
+import random
 
-# This attempts to convert to CDLI ATF/clean data
+# Character replacements for normalization
 akkadian_replacements = str.maketrans({
     "Ā": "a", "Ḫ": "h", "Ī": "i", "Ř": "r",
     "Š": "sh", "Ṣ": "sh", "Ū": "u",
@@ -30,42 +31,67 @@ def format_for_model(token):
 
     return token.lower().translate(akkadian_replacements)
 
-# ✅ Load data from Excel
+# ✅ Load data
 df = pd.read_excel(
     "sentence_filling_train_cleaned_no_ids.xlsx",
     usecols=["fragment_id", "fragment_line_num", "index_in_line", "value"],
     nrows=200000
 )
 
-# ✅ Convert values to strings and apply formatting
 df["value"] = df["value"].astype(str).apply(format_for_model)
-
-# ✅ Sort by fragment ID, line number, and token index
 df = df.sort_values(by=["fragment_id", "fragment_line_num", "index_in_line"])
-
-# ✅ Group by fragment lines to construct sentences
 lines_per_fragment_line = df.groupby(["fragment_id", "fragment_line_num"])["value"].apply(list).reset_index()
 
-masked_sentences = []
-targets = []
+# ✅ Load vocabulary (for token -> ID mapping)
+vocab = {}
+with open("vocab.txt", "r", encoding="utf-8") as f:
+    for line in f:
+        parts = line.strip().split()
+        if len(parts) == 2:
+            token, token_id = parts
+            vocab[token] = int(token_id)
 
-# ✅ Generate masked sentences
+# Special token IDs
+pad_id = vocab.get("<pad>", 0)
+mask_id = vocab.get("[MASK]", 2)
+unk_id = vocab.get("<unk>", 1)  # ✅ This was missing in your script
+
+# ✅ Prepare MLM samples
+mlm_data = []
+
 for _, row in lines_per_fragment_line.iterrows():
-    tokens = row["value"]  # Already formatted by `format_for_model`
+    tokens = row["value"]
+    if len(tokens) < 3:
+        continue
 
-    if len(tokens) > 2:
-        for i, word in enumerate(tokens):
-            masked_line = tokens.copy()
-            masked_line[i] = "[MASK]"
-            masked_sentence_str = " ".join(masked_line)
-            masked_sentences.append(f"Fill in the blank: {masked_sentence_str}")
-            targets.append(word)
+    token_ids = [vocab.get(t, unk_id) for t in tokens]
+    input_ids = token_ids.copy()
+    labels = [-100] * len(tokens)
 
-# ✅ Create shuffled DataFrame
-masked_data = pd.DataFrame({"masked_sentence": masked_sentences, "target_word": targets})
-masked_data = masked_data.sample(frac=1, random_state=42).reset_index(drop=True)
+    # Mask 15% of tokens
+    num_to_mask = max(1, int(len(tokens) * 0.15))
+    mask_indices = random.sample(range(len(tokens)), num_to_mask)
 
-# ✅ Save as CSV with proper quoting
-masked_data.to_csv("masked_token_data_normalized.csv", index=False, quoting=csv.QUOTE_ALL)
+    for idx in mask_indices:
+        original_id = token_ids[idx]
+        prob = random.random()
 
-print(f"Generated {len(masked_sentences)} masked samples.")
+        if prob < 0.8:
+            input_ids[idx] = mask_id
+            labels[idx] = original_id
+        elif prob < 0.9:
+            input_ids[idx] = random.choice(list(vocab.values()))
+            labels[idx] = original_id
+        # else: leave input unchanged, and labels[idx] remains -100
+
+
+    mlm_data.append({
+        "input_ids": input_ids,
+        "labels": labels
+    })
+
+# ✅ Save to CSV
+mlm_df = pd.DataFrame(mlm_data)
+mlm_df.to_csv("mlm_token_data.csv", index=False)
+
+print(f"✅ Generated {len(mlm_data)} masked MLM samples and saved to 'mlm_token_data.csv'.")

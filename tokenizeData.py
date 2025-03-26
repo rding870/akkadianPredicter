@@ -16,12 +16,11 @@ def load_vocab(vocab_path):
     return vocab
 
 # Load tokenizer and vocab
-tokenizer = pyonmttok.Tokenizer("aggressive", joiner_annotate=True)
+tokenizer = pyonmttok.Tokenizer("aggressive", joiner_annotate=False)
 vocab = load_vocab("vocab.txt")
 
 # Load dataset
 df = pd.read_csv("masked_token_data_normalized.csv")
-
 # ------------------ STEP 2: Define Tokenization Function ------------------
 def tokenize_function(examples):
     """Tokenizes input text, converts tokens to IDs, and generates attention masks."""
@@ -32,14 +31,15 @@ def tokenize_function(examples):
     label_ids_list = []
 
     for input_tokens, label_tokens in zip(input_tokens_batch, label_tokens_batch):
-        # Convert tokens to IDs
-        input_ids = [vocab.get(token) for token in input_tokens]
-        label_ids = [vocab.get(token) for token in label_tokens]  
+        # Convert tokens to IDs and remove None values
+        input_ids = [vocab.get(token, 0) for token in input_tokens]  # Default to 0 (padding token)
+        label_ids = [vocab.get(token, -100) for token in label_tokens]  # Default to -100 for loss masking
 
         input_ids_list.append(input_ids)
         label_ids_list.append(label_ids)
 
     return {"input_ids": input_ids_list, "labels": label_ids_list}
+
 
 # ------------------ STEP 3: Apply Tokenization & Save ------------------
 
@@ -59,13 +59,12 @@ max_target_length = max(tokenized_df["labels"].apply(len))
 print("max sentence length:", max_sentence_length)
 print("max_target_length:", max_target_length)
 
-# ✅ Function to pad sequences with "<pad>"
 def pad_input(tokens, max_length):
     return tokens + [0] * (max_length - len(tokens))
 
 def pad_label(tokens, max_length):
     return tokens + [-100] * (max_length - len(tokens))
-# ✅ Apply padding to sentences and targets
+
 tokenized_df["padded_sentence"] = tokenized_df["input_ids"].apply(lambda x: pad_input(x, max_sentence_length))
 tokenized_df["padded_target"] = tokenized_df["labels"].apply(lambda x: pad_label(x, max_target_length))
 tokenized_df["attention_mask"] = tokenized_df["padded_sentence"].apply(lambda x: [1 if token != 0 else 0 for token in x])
